@@ -1,0 +1,94 @@
+#! /usr/bin/env python3
+
+####################################################################################################
+
+from pathlib import Path
+
+####################################################################################################
+
+CACHE_DIR = Path.home().joinpath('.cache', 'uv')
+
+####################################################################################################
+
+def human_size(size: int) -> str:
+    size_suffixes = (' ', 'k', 'M', 'G')
+    size_suffix = 0
+    while size > 1024:
+        size /= 1024
+        size_suffix += 1
+    return f'{size:.1f} {size_suffixes[size_suffix]}B'
+
+####################################################################################################
+
+def disk_size(path: Path) -> int:
+    size = 0
+    for root, dirnames, filenames in path.walk():
+        for _ in filenames:
+            _ = root / _
+            # size += _.stat().st_size
+            # allocated
+            size += _.stat().st_blocks * 512
+    return size
+
+####################################################################################################
+
+class Package:
+
+    VERSION_MAP = {}
+
+    ##############################################
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.size = disk_size(path)
+        SUFFIX = '.dist-info'
+        self.version = None
+        for _ in path.iterdir():
+            name = _.name
+            if name.endswith(SUFFIX):
+                self.version = name[:-len(SUFFIX)]
+        if self.version is None:
+            print(f"WARNING: dist-info not found for {self.path}")
+        i = self.version.rfind('-')
+        if i != -1:
+            self.name = self.version[:i]
+            # print(self.version, self.name)
+            self.version = self.version[i+1:]
+            self.VERSION_MAP.setdefault(self.name, [])
+            self.VERSION_MAP[self.name].append(self.version)
+        else:
+            print(f"WARNING: unsupported version for {self.path}")
+
+####################################################################################################
+
+def look_cache(cache_path: Path) -> None:
+    size = disk_size(cache_path)
+    print(f"{cache_path.name:16} {human_size(size):>10}")
+    name = cache_path.name
+    if name.startswith('sdist'):
+        path = cache_path / 'pypi'
+        for _ in sorted(path.iterdir()):
+            size = disk_size(_)
+            print(f"    {_.name:16} {human_size(size):>10}")
+    if name.startswith('archive'):
+        packages = [Package(_) for _ in cache_path.iterdir() if _.is_dir()]
+        # for _ in sorted(packages, key=lambda _: _.name):
+        for _ in sorted(packages, key=lambda _: _.size):
+            print(f"    {_.name:30} {_.version:16} {human_size(_.size):>10}")
+
+####################################################################################################
+
+size = disk_size(CACHE_DIR)
+print(f"UV Cache is: {CACHE_DIR}   {human_size(size)}")
+for _ in sorted(CACHE_DIR.iterdir()):
+    if _.is_dir() and _.name[0] != '.':
+        look_cache(_)
+
+print()
+print('Packages with several versions:')
+print('  (duplicates corresponds to different cpython)')
+print()
+for name in sorted(Package.VERSION_MAP):
+    versions = sorted(Package.VERSION_MAP[name])
+    if len(versions) > 1:
+        print(f"  {name:32} {versions}")
