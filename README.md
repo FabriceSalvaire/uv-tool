@@ -3,6 +3,8 @@ This repository contains a Python script to show package sizes and versions of a
 Package manager like `uv` or `pnpm` are great for effectively isolating environments.  However it doesn't solve the
 disk space lost by unused projects.
 
+Note that a (fail) compiled package can heat disk space, e.g. `wxpython` is 2.7 GB on `sdist` directory.
+
 **Idea for new features:**
 - find all `.venv` on disk
 - find which `.venv` require a (outdated) package
