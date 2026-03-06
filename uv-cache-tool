@@ -57,17 +57,20 @@ class Package:
             name = _.name
             if name.endswith(SUFFIX):
                 self.version = name[:-len(SUFFIX)]
-        if self.version is None:
-            print(f"WARNING: dist-info not found for {self.path}")
-        i = self.version.rfind('-')
-        if i != -1:
-            self.name = self.version[:i]
-            # print(self.version, self.name)
-            self.version = self.version[i+1:]
-            self.VERSION_MAP.setdefault(self.name, [])
-            self.VERSION_MAP[self.name].append(self.version)
+        if self.version is not None:
+            i = self.version.rfind('-')
+            if i != -1:
+                self.name = self.version[:i]
+                # print(self.version, self.name)
+                self.version = self.version[i+1:]
+                self.VERSION_MAP.setdefault(self.name, [])
+                self.VERSION_MAP[self.name].append(self.version)
+            else:
+                print(f"WARNING: unsupported version for {self.path}")
         else:
-            print(f"WARNING: unsupported version for {self.path}")
+            self.name = '???'
+            self.version = '???'
+            print(f"WARNING: dist-info not found for {self.path}")
 
 ####################################################################################################
 
