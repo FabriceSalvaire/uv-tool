@@ -18,6 +18,7 @@
 ####################################################################################################
 
 from pathlib import Path
+import argparse
 import os
 
 from rich.console import Console
@@ -175,17 +176,47 @@ def look_cache(cache_path: Path) -> None:
 
 ####################################################################################################
 
-size = disk_size(CACHE_DIR)
-console.print(f"UV Cache is: {CACHE_DIR}   {human_size(size)}")
-for _ in sorted(CACHE_DIR.iterdir()):
-    if _.is_dir() and _.name[0] != '.':
-        look_cache(_)
+parser = argparse.ArgumentParser(
+    prog='uv-cache-tool',
+    description='',
+    epilog='',
+)
+parser.add_argument(
+    '--cache-size',
+    action='store_true',
+)
+parser.add_argument(
+    '--find-venv',
+)
+args = parser.parse_args()
 
-console.print()
-console.print('Packages with several versions:')
-console.print('  (duplicates corresponds to different cpython)')
-console.print()
-for name in sorted(Package.VERSION_MAP):
-    versions = sorted(Package.VERSION_MAP[name])
-    if len(versions) > 1:
-        console.print(f"  {name:32} {versions}")
+####################################################################################################
+
+if args.cache_size:
+    size = disk_size(CACHE_DIR)
+    console.print(f"UV Cache is: {CACHE_DIR}   {human_size(size)}")
+    for _ in sorted(CACHE_DIR.iterdir()):
+        if _.is_dir() and _.name[0] != '.':
+            look_cache(_)
+
+    console.print()
+    console.print('Packages with several versions:')
+    console.print('  (duplicates corresponds to different cpython)')
+    console.print()
+    for name in sorted(Package.VERSION_MAP):
+        versions = sorted(Package.VERSION_MAP[name])
+        if len(versions) > 1:
+            console.print(f"  {name:32} {versions}")
+
+if args.find_venv:
+    path = Path(args.find_venv)
+    for root, dirnames, filenames in path.walk():
+        dirnames.sort()   # Fixme: unicode
+        if root.name == '.venv':
+            console.print(root)
+        for filename in sorted(filenames):
+            match filename:
+                case 'uv.lock':
+                    pass
+                case '.python-version':
+                    pass
