@@ -29,7 +29,7 @@ CACHE_DIR = Path.home().joinpath('.cache', 'uv')
 
 ####################################################################################################
 
-console = Console()
+C = Console()
 
 ####################################################################################################
 
@@ -103,7 +103,7 @@ def disk_size(path: Path) -> int:
             nonlocal size
             size += file.disk_size
         # else:
-        #     console.print(f"hardlink duplicate {file}")
+        #     C.print(f"hardlink duplicate {file}")
         inodes.add(inode)
 
     accumulate(path)
@@ -145,17 +145,18 @@ class Package:
                 self.VERSION_MAP.setdefault(self.name, [])
                 self.VERSION_MAP[self.name].append(self.version)
             else:
-                console.print(f"[red]WARNING: unsupported version for {self.path}")
+                C.print(f"[red]WARNING: unsupported version for {self.path}")
         else:
             # Fixme:
             #   /home/fabrice/.cache/uv/archive-v0/jnmE0T_XlOGz8rOhVrFja/bin/python3.13
-            console.print(f"[red]WARNING: dist-info not found for {self.path}")
+            C.print(f"[red]WARNING: dist-info not found for {self.path}")
 
 ####################################################################################################
 
 def look_cache(cache_path: Path) -> None:
-    size = disk_size(cache_path)
-    console.print(f"{cache_path.name:16} {human_size(size):>10}")
+    with C.status(f"Computing {cache_path} size..."):
+        size = disk_size(cache_path)
+    C.print(f"{cache_path.name:16} {human_size(size):>10}")
     size_accumulator = 0
 
     name = cache_path.name
@@ -164,33 +165,34 @@ def look_cache(cache_path: Path) -> None:
         for _ in sorted(path.iterdir()):
             size = disk_size(_)
             size_accumulator += size
-            console.print(f"    {_.name:30} {human_size(size):>10}   [yellow]{human_size(size_accumulator):>10}")
+            C.print(f"    {_.name:30} {human_size(size):>10}   [yellow]{human_size(size_accumulator):>10}")
     if name.startswith('archive'):
         packages = [Package(_) for _ in cache_path.iterdir() if _.is_dir()]
         # for _ in sorted(packages, key=lambda _: _.name):
         for _ in sorted(packages, key=lambda _: _.size):
             size_accumulator += _.size
-            console.print(f"    {_.name:30} {_.version:16} {human_size(_.size):>10}   [yellow]{human_size(size_accumulator):>10}")
+            C.print(f"    {_.name:30} {_.version:16} {human_size(_.size):>10}   [yellow]{human_size(size_accumulator):>10}")
     # if size_accumulator:
-    #     console.print(f"  [yellow]Size accumulator: {human_size(size_accumulator)}")
+    #     C.print(f"  [yellow]Size accumulator: {human_size(size_accumulator)}")
 
 ####################################################################################################
 
 def cache_size_command() -> None:
-    size = disk_size(CACHE_DIR)
-    console.print(f"UV Cache is: {CACHE_DIR}   {human_size(size)}")
+    with C.status(f"Computing {CACHE_DIR} size..."):
+        size = disk_size(CACHE_DIR)
+    C.print(f"UV Cache is: {CACHE_DIR}   {human_size(size)}")
     for _ in sorted(CACHE_DIR.iterdir()):
         if _.is_dir() and _.name[0] != '.':
             look_cache(_)
 
-    console.print()
-    console.print('Packages with several versions:')
-    console.print('  (duplicates corresponds to different cpython)')
-    console.print()
+    C.print()
+    C.print('Packages with several versions:')
+    C.print('  (duplicates corresponds to different cpython)')
+    C.print()
     for name in sorted(Package.VERSION_MAP):
         versions = sorted(Package.VERSION_MAP[name])
         if len(versions) > 1:
-            console.print(f"  {name:32} {versions}")
+            C.print(f"  {name:32} {versions}")
 
 ####################################################################################################
 
@@ -199,7 +201,7 @@ def find_venv_command(path: Path | str) -> None:
     for root, dirnames, filenames in path.walk():
         dirnames.sort()   # Fixme: unicode
         if root.name == '.venv':
-            console.print(root)
+            C.print(root)
         for filename in sorted(filenames):
             match filename:
                 case 'uv.lock':
