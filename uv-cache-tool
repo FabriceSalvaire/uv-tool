@@ -11,6 +11,9 @@
 ####################################################################################################
 
 # Notes:
+#   .venv/lib/python3.15/site-packages/package are hardlinked to ~/.cave/uv/archive-v0/uuid/package
+#   to remove effectively a package we must delete it in the .venv and then prune the cache !
+#
 #   each package as an entry (directory) per Python version in archive-v0
 #   the directory has the same content for a pure Python package
 #   but the directory inode is different ! Thus it is duplicated ???
@@ -19,6 +22,7 @@
 
 import argparse
 import os
+import subprocess
 from pathlib import Path
 
 from rich.console import Console
@@ -157,7 +161,17 @@ class UvCacheDirectory(UvCacheMixin):
 
         size_accumulator = 0
         name = self.path.name
-        if name.startswith('sdist'):
+        if name.startswith('archive'):
+            # archive-v0/uuid/
+            #   package/
+            #   package-version.data/
+            #   package-version.dist-info/
+            packages = [Package(_) for _ in self.path.iterdir() if _.is_dir()]
+            # for _ in sorted(packages, key=lambda _: _.name):
+            for _ in sorted(packages, key=lambda _: _.size):
+                size_accumulator += _.size
+                C.print(f"    {_.name:30} {_.version:16} {human_size(_.size):>10}   [yellow]{human_size(size_accumulator):>10}")
+        elif name.startswith('sdist'):
             path = self.path / 'pypi'
             with C.status(f"Computing {path} size..."):
                 # Fixme: bucket: editable git path
@@ -169,16 +183,7 @@ class UvCacheDirectory(UvCacheMixin):
                     size = disk_size(_)
                     size_accumulator += size
                     C.print(f"    {_.name:30} {human_size(size):>10}   [yellow]{human_size(size_accumulator):>10}")
-        elif name.startswith('archive'):
-            # archive-v0/uuid/
-            #   package/
-            #   package-version.data/
-            #   package-version.dist-info/
-            packages = [Package(_) for _ in self.path.iterdir() if _.is_dir()]
-            # for _ in sorted(packages, key=lambda _: _.name):
-            for _ in sorted(packages, key=lambda _: _.size):
-                size_accumulator += _.size
-                C.print(f"    {_.name:30} {_.version:16} {human_size(_.size):>10}   [yellow]{human_size(size_accumulator):>10}")
+
         # if size_accumulator:
         #     C.print(f"  [yellow]Size accumulator: {human_size(size_accumulator)}")
 
@@ -222,16 +227,25 @@ class Package(UvCacheMixin):
 
 ####################################################################################################
 
+def simplify_versions(versions: list[str]) -> list[tuple[str, int]]:
+    return [(_, versions.count(_)) for _ in set(versions)]
+
 def cache_size_command() -> None:
-    uv_cache = UvCache(CACHE_DIR)
+    # use shell to find uv
+    subprocess.check_call('uv cache prune', shell=True)
+
+    UvCache(CACHE_DIR)
+
     C.print()
     C.print('Packages with several versions:')
     C.print('  (duplicates corresponds to different cpython)')
     C.print()
     for name in sorted(Package.VERSION_MAP):
-        versions = sorted(Package.VERSION_MAP[name])
+        versions = simplify_versions(Package.VERSION_MAP[name])
+        versions.sort(key=lambda _: _[0])
         if len(versions) > 1:
-            C.print(f"  {name:32} {versions}")
+            _  = [version + (f" #{count}" if count > 1 else '') for version, count in versions]
+            C.print(f"  {name:32} {_}")
 
 ####################################################################################################
 
