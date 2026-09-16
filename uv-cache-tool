@@ -40,11 +40,17 @@ def human_size(size: int) -> str:
     while _ > 1024:
         _ /= 1024
         size_suffix += 1
-    return f'{_:.1f} {size_suffixes[size_suffix]}B'
+    suffix = size_suffixes[size_suffix]
+    match suffix:
+        case 'M' | 'G':
+            return f'{_:.1f} {suffix}B'
+        case _:
+            return '< MB'
 
 ####################################################################################################
 
 class PathInode:
+    """Convenient class to information like disk usage for a path."""
 
     ##############################################
 
@@ -92,7 +98,8 @@ def disk_size(path: Path) -> int:
     """Return the disk size of path in bytes.
 
     Hardlinked inodes are counted once.
-    """
+ 
+   """
     size = 0
     inodes: set[int] = set()
 
@@ -116,24 +123,86 @@ def disk_size(path: Path) -> int:
 
 ####################################################################################################
 
-class Package:
+class UvCacheMixin:
+
+    ##############################################
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        with C.status(f"Computing {self.path} size..."):
+            self.size = disk_size(self.path)
+
+####################################################################################################
+
+class UvCache(UvCacheMixin):
+
+    ##############################################
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        C.print(f"UV Cache is: {CACHE_DIR}   {human_size(self.size)}")
+        for _ in sorted(self.path.iterdir()):
+            if _.is_dir() and _.name[0] != '.':
+                UvCacheDirectory(_)
+
+####################################################################################################
+
+class UvCacheDirectory(UvCacheMixin):
+
+    ##############################################
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        C.print(f"{self.path.name:16} {human_size(self.size):>10}")
+
+        size_accumulator = 0
+        name = self.path.name
+        if name.startswith('sdist'):
+            path = self.path / 'pypi'
+            with C.status(f"Computing {path} size..."):
+                # Fixme: bucket: editable git path
+                for _ in sorted(path.iterdir()):
+                    # /package_name/version/uuid/
+                    #   package-version-cp315-cp315-linux_x86_64 symlink to archive-v0/uuid
+                    #   package-version-cp315-cp315-linux_x86_64.whl
+                    #   src
+                    size = disk_size(_)
+                    size_accumulator += size
+                    C.print(f"    {_.name:30} {human_size(size):>10}   [yellow]{human_size(size_accumulator):>10}")
+        elif name.startswith('archive'):
+            # archive-v0/uuid/
+            #   package/
+            #   package-version.data/
+            #   package-version.dist-info/
+            packages = [Package(_) for _ in self.path.iterdir() if _.is_dir()]
+            # for _ in sorted(packages, key=lambda _: _.name):
+            for _ in sorted(packages, key=lambda _: _.size):
+                size_accumulator += _.size
+                C.print(f"    {_.name:30} {_.version:16} {human_size(_.size):>10}   [yellow]{human_size(size_accumulator):>10}")
+        # if size_accumulator:
+        #     C.print(f"  [yellow]Size accumulator: {human_size(size_accumulator)}")
+
+####################################################################################################
+
+class Package(UvCacheMixin):
     """Implements a Python Package"""
 
-    VERSION_MAP = {}
+    VERSION_MAP: dict[str, list[str]] = {}
 
     ##############################################
 
     def __init__(self, path: Path) -> None:
         # compute disk size
         # get version and name
-        self.path = path
-        self.size = disk_size(path)
+        super().__init__(path)
+        # Get package name and version from name-version.dist-info filename
+        # Register to VERSION_MAP
         # Fixme:
         self.name = '???'
         self.version = '???'
         name_version = None
         SUFFIX = '.dist-info'
-        for _ in path.iterdir():
+        for _ in self.path.iterdir():
             name = _.name
             if name.endswith(SUFFIX):
                 name_version = name[:-len(SUFFIX)]
@@ -153,38 +222,8 @@ class Package:
 
 ####################################################################################################
 
-def look_cache(cache_path: Path) -> None:
-    with C.status(f"Computing {cache_path} size..."):
-        size = disk_size(cache_path)
-    C.print(f"{cache_path.name:16} {human_size(size):>10}")
-    size_accumulator = 0
-
-    name = cache_path.name
-    if name.startswith('sdist'):
-        path = cache_path / 'pypi'
-        for _ in sorted(path.iterdir()):
-            size = disk_size(_)
-            size_accumulator += size
-            C.print(f"    {_.name:30} {human_size(size):>10}   [yellow]{human_size(size_accumulator):>10}")
-    if name.startswith('archive'):
-        packages = [Package(_) for _ in cache_path.iterdir() if _.is_dir()]
-        # for _ in sorted(packages, key=lambda _: _.name):
-        for _ in sorted(packages, key=lambda _: _.size):
-            size_accumulator += _.size
-            C.print(f"    {_.name:30} {_.version:16} {human_size(_.size):>10}   [yellow]{human_size(size_accumulator):>10}")
-    # if size_accumulator:
-    #     C.print(f"  [yellow]Size accumulator: {human_size(size_accumulator)}")
-
-####################################################################################################
-
 def cache_size_command() -> None:
-    with C.status(f"Computing {CACHE_DIR} size..."):
-        size = disk_size(CACHE_DIR)
-    C.print(f"UV Cache is: {CACHE_DIR}   {human_size(size)}")
-    for _ in sorted(CACHE_DIR.iterdir()):
-        if _.is_dir() and _.name[0] != '.':
-            look_cache(_)
-
+    uv_cache = UvCache(CACHE_DIR)
     C.print()
     C.print('Packages with several versions:')
     C.print('  (duplicates corresponds to different cpython)')
