@@ -22,6 +22,7 @@
 
 import argparse
 import os
+import re
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -132,7 +133,7 @@ class UvCacheMixin:
     ##############################################
 
     def __init__(self, path: Path) -> None:
-        print(f"Path {path}")
+        # print(f"Path {path}")
         self.path = path
         self._size: int | None = None  # lazy
 
@@ -154,12 +155,15 @@ class UvCache(UvCacheMixin):
     def __init__(self, path: Path) -> None:
         super().__init__(path)
         self.packages: dict[str, Package] = {}
-        self.sdist_packages: dict[str, SdistPackage] = {}
+        self.sdist_packages: dict[str, Package] = {}
         self._scan_archive()
         self._scan_sdist()
-        for item in (self.packages, self.sdist_packages):
+        for item in (self.sdist_packages, self.packages):
             for package in item.values():
-                print(f"{package.name} {package.versions}")
+                print(f"{package.name}")
+                # print(f"{package.name} {package.versions}")
+                for version in sorted(package, key=lambda _: _.version):
+                    print(f"  {version}")
 
     ##############################################
 
@@ -187,7 +191,7 @@ class UvCache(UvCacheMixin):
             for version in package.iterdir()
         ]
         for package in packages:
-            self.packages.setdefault(package.name, Package(package.name)).add_version(package)
+            self.sdist_packages.setdefault(package.name, Package(package.name)).add_version(package)
 
 ####################################################################################################
 
@@ -267,12 +271,15 @@ class Package:
     def versions(self) -> list[str]:
         return [_.version for _ in self]
 
+    @property
+    def versions_count(self) -> list[tuple[str, int]]:
+        versions = self.versions
+        return [(_, versions.count(_)) for _ in set(versions)]
+
 ####################################################################################################
 
 class ArchivePackage(PackageVersion):
     """Implements a Python Package"""
-
-    VERSION_MAP: dict[str, list[str]] = {}
 
     ##############################################
 
@@ -280,8 +287,8 @@ class ArchivePackage(PackageVersion):
     def _get_name_version(cls, path: Path) -> tuple[str, str]:
         # Get package name and version from name-version.dist-info filename
         # Fixme:
-        name = '???'
-        version = '???'
+        name = ''
+        version = ''
         name_version = None
         SUFFIX = '.dist-info'
         for _ in path.iterdir():
@@ -293,14 +300,14 @@ class ArchivePackage(PackageVersion):
             if i != -1:
                 name = name_version[:i]
                 version = name_version[i+1:]
-                # self.VERSION_MAP.setdefault(name, [])
-                # self.VERSION_MAP[name].append(version)
             else:
                 C.print(f"[red]WARNING: unsupported version for {path}")
         else:
             # Fixme:
             #   /home/fabrice/.cache/uv/archive-v0/jnmE0T_XlOGz8rOhVrFja/bin/python3.13
             C.print(f"[red]WARNING: dist-info not found for {path}")
+        if not (name and version):
+            raise ValueError(f"Cannot retrieve name and version for {path}")
         return name, version
 
     ##############################################
@@ -328,15 +335,25 @@ class SdistPackage(PackageVersion):
         version = path.name
         super().__init__(path, name, version)
 
+        SUFFIX = '.whl'
+        self.wheel = None
+        self.py_version = None
+        for root, dirnames, filenames in path.walk():
+            for filename in filenames:
+                if filename.endswith(SUFFIX):
+                    self.wheel = filename
+                    break
+        if self.wheel is not None:
+            match = re.match(r'^.*-cp(\d\d\d)-', self.wheel)
+            if match:
+                self.py_version = match.group(1)
+
     ##############################################
 
     def __repr__(self) -> str:
-        return f"Sdist Package {self.name} - {self.version}"
+        return f"Sdist Package {self.name} - {self.version} - {self.py_version}"
 
 ####################################################################################################
-
-def simplify_versions(versions: list[str]) -> list[tuple[str, int]]:
-    return [(_, versions.count(_)) for _ in set(versions)]
 
 def cache_size_command(prune: bool = False) -> None:
     # use shell to find uv
