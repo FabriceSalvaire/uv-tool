@@ -60,7 +60,7 @@ class PathInode:
 
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
-        self._stat: os.stat_result | None = None
+        self._stat: os.stat_result | None = None  # lazy
 
     ##############################################
 
@@ -102,7 +102,7 @@ def disk_size(path: Path) -> int:
     """Return the disk size of path in bytes.
 
     Hardlinked inodes are counted once.
- 
+
    """
     size = 0
     inodes: set[int] = set()
@@ -119,10 +119,9 @@ def disk_size(path: Path) -> int:
 
     accumulate(path)
     for root, dirnames, filenames in path.walk():
-        for _ in dirnames:
-            accumulate(root / _)
-        for _ in filenames:
-            accumulate(root / _)
+        for item in (dirnames, filenames):
+            for _ in item:
+                accumulate(root / _)
     return size
 
 ####################################################################################################
@@ -132,9 +131,18 @@ class UvCacheMixin:
     ##############################################
 
     def __init__(self, path: Path) -> None:
+        print(f"Path {path}")
         self.path = path
-        with C.status(f"Computing {self.path} size..."):
-            self.size = disk_size(self.path)
+        self._size: int | None = None  # lazy
+
+    ##############################################
+
+    @property
+    def size(self) -> int:
+        if self._size is None:
+            with C.status(f"Computing {self.path} size..."):
+                self._size = disk_size(self.path)
+        return self._size
 
 ####################################################################################################
 
@@ -144,10 +152,41 @@ class UvCache(UvCacheMixin):
 
     def __init__(self, path: Path) -> None:
         super().__init__(path)
+        self.packages: dict[str, list[Package]] = {}
+        self.sdist_packages: dict[str, list[SdistPackage]] = {}
+        self._scan_archive()
+        self._scan_sdist()
+        for item in (self.packages, self.sdist_packages):
+            for _ in item.values():
+                print(_)
+
+    ##############################################
+
+    def compute_size(self) -> None:
         C.print(f"UV Cache is: {CACHE_DIR}   {human_size(self.size)}")
         for _ in sorted(self.path.iterdir()):
             if _.is_dir() and _.name[0] != '.':
                 UvCacheDirectory(_)
+
+    ##############################################
+
+    def _scan_archive(self) -> None:
+        path = self.path / 'archive-v0'
+        packages = [Package(_) for _ in path.iterdir() if _.is_dir()]
+        for package in packages:
+            self.packages.setdefault(package.name, []).append(package)
+
+    ##############################################
+
+    def _scan_sdist(self) -> None:
+        path = self.path / 'sdists-v9'
+        packages = [
+            SdistPackage(version)
+            for package in (path / 'pypi').iterdir()
+            for version in package.iterdir()
+        ]
+        for package in packages:
+            self.sdist_packages.setdefault(package.name, []).append(package)
 
 ####################################################################################################
 
@@ -197,9 +236,8 @@ class Package(UvCacheMixin):
     ##############################################
 
     def __init__(self, path: Path) -> None:
-        # compute disk size
-        # get version and name
         super().__init__(path)
+        # get version and name
         # Get package name and version from name-version.dist-info filename
         # Register to VERSION_MAP
         # Fixme:
@@ -225,27 +263,50 @@ class Package(UvCacheMixin):
             #   /home/fabrice/.cache/uv/archive-v0/jnmE0T_XlOGz8rOhVrFja/bin/python3.13
             C.print(f"[red]WARNING: dist-info not found for {self.path}")
 
+    ##############################################
+
+    def __repr__(self) -> str:
+        return f"Package {self.name} - {self.version}"
+
+####################################################################################################
+
+class SdistPackage(UvCacheMixin):
+    """Implements a Python Package"""
+
+    ##############################################
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.name = path.parent.name
+        self.version = path.name
+
+    ##############################################
+
+    def __repr__(self) -> str:
+        return f"Sdist Package {self.name} - {self.version}"
+
 ####################################################################################################
 
 def simplify_versions(versions: list[str]) -> list[tuple[str, int]]:
     return [(_, versions.count(_)) for _ in set(versions)]
 
-def cache_size_command() -> None:
+def cache_size_command(prune: bool = False) -> None:
     # use shell to find uv
-    subprocess.check_call('uv cache prune', shell=True)
+    if prune:
+        subprocess.check_call('uv cache prune', shell=True)
 
     UvCache(CACHE_DIR)
 
-    C.print()
-    C.print('Packages with several versions:')
-    C.print('  (duplicates corresponds to different cpython)')
-    C.print()
-    for name in sorted(Package.VERSION_MAP):
-        versions = simplify_versions(Package.VERSION_MAP[name])
-        versions.sort(key=lambda _: _[0])
-        if len(versions) > 1:
-            _  = [version + (f" #{count}" if count > 1 else '') for version, count in versions]
-            C.print(f"  {name:32} {_}")
+    # C.print()
+    # C.print('Packages with several versions:')
+    # C.print('  (duplicates corresponds to different cpython)')
+    # C.print()
+    # for name in sorted(Package.VERSION_MAP):
+    #     versions = simplify_versions(Package.VERSION_MAP[name])
+    #     versions.sort(key=lambda _: _[0])
+    #     if len(versions) > 1:
+    #         _  = [version + (f" #{count}" if count > 1 else '') for version, count in versions]
+    #         C.print(f"  {name:32} {_}")
 
 ####################################################################################################
 
