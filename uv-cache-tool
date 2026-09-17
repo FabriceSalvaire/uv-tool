@@ -584,7 +584,7 @@ class Project:
         )
         stdout = process.stdout.decode('utf8')
         for line in stdout.splitlines():
-            if line.startswith('├'):
+            if line[0] in '├└─':
                 _, name, version , *tail= line.split(' ')
                 _ = Dependency(self, name, version, ' '.join(tail))
                 self.dependencies.append(_)
