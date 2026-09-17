@@ -34,8 +34,6 @@ from rich.console import Console
 
 CACHE_DIR = Path.home().joinpath('.cache', 'uv')
 
-####################################################################################################
-
 C = Console()
 
 ####################################################################################################
@@ -163,18 +161,18 @@ class UvCache(UvCacheMixin):
     ##############################################
 
     def list(self) -> None:
+        def print_directory(directory: dict[str, Package]) -> None:
+            for package in sorted(directory.values(), key=lambda _: _.name):
+                C.print(f"[blue]{package.name}")
+                for version in cast(Iterator[SdistPackage], package):
+                    C.print(f"  v{version.version:<24} @{version.py_version}")
+
         C.rule()
         C.print("[red]SDist Packages")
-        for package in sorted(self.sdist_packages.values(), key=lambda _: _.name):
-            C.print(f"[blue]{package.name}")
-            for version in cast(Iterator[SdistPackage], package):
-                C.print(f"  v{version.version} @{version.py_version}")
+        print_directory(self.sdist_packages)
         C.rule()
         C.print("[red]Packages")
-        for package in sorted(self.packages.values(), key=lambda _: _.name):
-            C.print(f"[blue]{package.name}")
-            for version in cast(Iterator[SdistPackage], package):
-                C.print(f"  v{version.version}")
+        print_directory(self.packages)
 
     ##############################################
 
@@ -268,7 +266,7 @@ class Package:
         return len(self._versions)
 
     def __iter__(self) -> Iterator[PackageVersion]:
-        return iter(sorted(self._versions, key=lambda _: _.version))
+        return iter(sorted(self._versions, key=lambda _: f'{_.version}-{_.py_version}'))
 
     ##############################################
 
@@ -396,14 +394,19 @@ class SdistPackage(PackageVersion):
 
 ####################################################################################################
 
-def cache_size_command(prune: bool = False) -> None:
+def list_command() -> None:
+    uv_cache = UvCache(CACHE_DIR)
+    uv_cache.list()
+
+####################################################################################################
+
+def cache_size_command(prune: bool, min_size: int) -> None:
     # use shell to find uv
     if prune:
         subprocess.check_call('uv cache prune', shell=True)
 
     uv_cache = UvCache(CACHE_DIR)
-    # uv_cache.list()
-    uv_cache.compute_size(min_size = 10 * 1024**2)
+    uv_cache.compute_size(min_size)
 
 ####################################################################################################
 
@@ -428,6 +431,10 @@ parser = argparse.ArgumentParser(
     epilog='',
 )
 parser.add_argument(
+    '--list',
+    action='store_true',
+)
+parser.add_argument(
     '--cache-size',
     action='store_true',
 )
@@ -438,8 +445,11 @@ args = parser.parse_args()
 
 ####################################################################################################
 
-if args.cache_size:
-    cache_size_command()
+# Fixme: better ?
+if args.list:
+    list_command()
+elif args.cache_size:
+    cache_size_command(prune=False, min_size=10 * 1024**2)
 elif args.find_venv:
     find_venv_command(args.find_venv)
 else:
