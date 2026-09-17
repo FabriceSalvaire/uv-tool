@@ -26,6 +26,7 @@ import re
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 from rich.console import Console
 
@@ -39,19 +40,19 @@ C = Console()
 
 ####################################################################################################
 
-def human_size(size: int) -> str:
-    size_suffixes = (' ', 'k', 'M', 'G')
-    size_suffix = 0
+def human_size(size: int, min_suffix: str = 'M') -> str:
+    SUFFIXES = (' ', 'k', 'M', 'G', 'T')
+    suffix_index = 0
     _: float = size
     while _ > 1024:
         _ /= 1024
-        size_suffix += 1
-    suffix = size_suffixes[size_suffix]
-    match suffix:
-        case 'M' | 'G':
-            return f'{_:.1f} {suffix}B'
-        case _:
-            return '< MB'
+        suffix_index += 1
+    if suffix_index >= SUFFIXES.index(min_suffix):
+        suffix = SUFFIXES[suffix_index]
+        return f'{_:.1f} {suffix}B'
+    else:
+        suffix = SUFFIXES[suffix_index + 1]
+        return f'< {suffix}B'
 
 ####################################################################################################
 
@@ -158,12 +159,22 @@ class UvCache(UvCacheMixin):
         self.sdist_packages: dict[str, Package] = {}
         self._scan_archive()
         self._scan_sdist()
-        for item in (self.sdist_packages, self.packages):
-            for package in item.values():
-                print(f"{package.name}")
-                # print(f"{package.name} {package.versions}")
-                for version in sorted(package, key=lambda _: _.version):
-                    print(f"  {version}")
+
+    ##############################################
+
+    def list(self) -> None:
+        C.rule()
+        C.print("[red]SDist Packages")
+        for package in sorted(self.sdist_packages.values(), key=lambda _: _.name):
+            C.print(f"[blue]{package.name}")
+            for version in cast(Iterator[SdistPackage], package):
+                C.print(f"  v{version.version} @{version.py_version}")
+        C.rule()
+        C.print("[red]Packages")
+        for package in sorted(self.packages.values(), key=lambda _: _.name):
+            C.print(f"[blue]{package.name}")
+            for version in cast(Iterator[SdistPackage], package):
+                C.print(f"  v{version.version}")
 
     ##############################################
 
@@ -201,32 +212,24 @@ class UvCacheDirectory(UvCacheMixin):
 
     def __init__(self, path: Path) -> None:
         super().__init__(path)
-        C.print(f"{self.path.name:16} {human_size(self.size):>10}")
+        C.print(f"  {self.path.name:16} {human_size(self.size):>10}")
 
-        size_accumulator = 0
-        name = self.path.name
-        if name.startswith('archive'):
-            # archive-v0/uuid/
-            #   package/
-            #   package-version.data/
-            #   package-version.dist-info/
-            packages = [Package(_) for _ in self.path.iterdir() if _.is_dir()]
-            # for _ in sorted(packages, key=lambda _: _.name):
-            for _ in sorted(packages, key=lambda _: _.size):
-                size_accumulator += _.size
-                C.print(f"    {_.name:30} {_.version:16} {human_size(_.size):>10}   [yellow]{human_size(size_accumulator):>10}")
-        elif name.startswith('sdist'):
-            path = self.path / 'pypi'
-            with C.status(f"Computing {path} size..."):
-                # Fixme: bucket: editable git path
-                for _ in sorted(path.iterdir()):
-                    # /package_name/version/uuid/
-                    #   package-version-cp315-cp315-linux_x86_64 symlink to archive-v0/uuid
-                    #   package-version-cp315-cp315-linux_x86_64.whl
-                    #   src
-                    size = disk_size(_)
-                    size_accumulator += size
-                    C.print(f"    {_.name:30} {human_size(size):>10}   [yellow]{human_size(size_accumulator):>10}")
+        # size_accumulator = 0
+        # name = self.path.name
+        # if name.startswith('archive'):
+        #     packages = [Package(_) for _ in self.path.iterdir() if _.is_dir()]
+        #     # for _ in sorted(packages, key=lambda _: _.name):
+        #     for _ in sorted(packages, key=lambda _: _.size):
+        #         size_accumulator += _.size
+        #         C.print(f"    {_.name:30} {_.version:16} {human_size(_.size):>10}   [yellow]{human_size(size_accumulator):>10}")
+        # elif name.startswith('sdist'):
+        #     path = self.path / 'pypi'
+        #     with C.status(f"Computing {path} size..."):
+        #         # Fixme: bucket: editable git path
+        #         for _ in sorted(path.iterdir()):
+        #             size = disk_size(_)
+        #             size_accumulator += size
+        #             C.print(f"    {_.name:30} {human_size(size):>10}   [yellow]{human_size(size_accumulator):>10}")
 
         # if size_accumulator:
         #     C.print(f"  [yellow]Size accumulator: {human_size(size_accumulator)}")
@@ -258,7 +261,7 @@ class Package:
         return len(self._versions)
 
     def __iter__(self) -> Iterator[PackageVersion]:
-        return iter(self._versions)
+        return iter(sorted(self._versions, key=lambda _: _.version))
 
     ##############################################
 
@@ -280,6 +283,11 @@ class Package:
 
 class ArchivePackage(PackageVersion):
     """Implements a Python Package"""
+
+    # archive-v0/uuid/
+    #   package/
+    #   package-version.data/
+    #   package-version.dist-info/
 
     ##############################################
 
@@ -328,6 +336,11 @@ class ArchivePackage(PackageVersion):
 class SdistPackage(PackageVersion):
     """Implements a Python Package"""
 
+    # /package_name/version/uuid/
+    #   package-version-cp315-cp315-linux_x86_64 symlink to archive-v0/uuid
+    #   package-version-cp315-cp315-linux_x86_64.whl
+    #   src
+
     ##############################################
 
     def __init__(self, path: Path) -> None:
@@ -346,7 +359,8 @@ class SdistPackage(PackageVersion):
         if self.wheel is not None:
             match = re.match(r'^.*-cp(\d\d\d)-', self.wheel)
             if match:
-                self.py_version = match.group(1)
+                _ = match.group(1)
+                self.py_version = f'{_[0]}.{_[1:3]}'
 
     ##############################################
 
@@ -360,7 +374,9 @@ def cache_size_command(prune: bool = False) -> None:
     if prune:
         subprocess.check_call('uv cache prune', shell=True)
 
-    UvCache(CACHE_DIR)
+    uv_cache = UvCache(CACHE_DIR)
+    # uv_cache.list()
+    uv_cache.compute_size()
 
     # C.print()
     # C.print('Packages with several versions:')
