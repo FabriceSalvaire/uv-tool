@@ -178,11 +178,36 @@ class UvCache(UvCacheMixin):
 
     ##############################################
 
-    def compute_size(self) -> None:
-        C.print(f"UV Cache is: {CACHE_DIR}   {human_size(self.size)}")
-        for _ in sorted(self.path.iterdir()):
-            if _.is_dir() and _.name[0] != '.':
-                UvCacheDirectory(_)
+    def compute_size(self, min_size: int = 10*1024**2) -> None:
+        # C.print(f"UV Cache is: {CACHE_DIR}   {human_size(self.size)}")
+        # for _ in sorted(self.path.iterdir()):
+        #     if _.is_dir() and _.name[0] != '.':
+        #         directory = UvCacheDirectory(_)
+        #         C.print(f"  {directory.path.name:16} {human_size(directory.size):>10}")
+        C.rule()
+        C.print("[red]SDist Packages")
+        for package in sorted(self.sdist_packages.values(), key=lambda _: _.name):
+            size = sum(_.size for _ in package)
+            if size < min_size:
+                continue
+            C.print(f"[blue]{package.name:<28} {human_size(size):>10}")
+            for package_version in cast(Iterator[SdistPackage], package):
+                version = package_version.version
+                py_version = str(package_version.py_version)
+                size = package_version.size
+                C.print(f"  v{version:<12} @{py_version:<8} {human_size(size):>13}")
+        C.rule()
+        C.print("[red]Packages")
+        for package in sorted(self.packages.values(), key=lambda _: _.name):
+            size = sum(_.size for _ in package)
+            if size < min_size:
+                continue
+            C.print(f"[blue]{package.name:<28} {human_size(size):>10}")
+            for package_version in cast(Iterator[ArchivePackage], package):
+                version = package_version.version
+                py_version = '?'  # str(package_version.py_version)
+                size = package_version.size
+                C.print(f"  v{version:<12} @{py_version:<8} {human_size(size):>13}")
 
     ##############################################
 
@@ -196,11 +221,13 @@ class UvCache(UvCacheMixin):
 
     def _scan_sdist(self) -> None:
         path = self.path / 'sdists-v9'
+        # Fixme: bucket: editable git path
         packages = [
             SdistPackage(version)
             for package in (path / 'pypi').iterdir()
             for version in package.iterdir()
         ]
+        # Fixme: duplicated code
         for package in packages:
             self.sdist_packages.setdefault(package.name, Package(package.name)).add_version(package)
 
@@ -212,27 +239,6 @@ class UvCacheDirectory(UvCacheMixin):
 
     def __init__(self, path: Path) -> None:
         super().__init__(path)
-        C.print(f"  {self.path.name:16} {human_size(self.size):>10}")
-
-        # size_accumulator = 0
-        # name = self.path.name
-        # if name.startswith('archive'):
-        #     packages = [Package(_) for _ in self.path.iterdir() if _.is_dir()]
-        #     # for _ in sorted(packages, key=lambda _: _.name):
-        #     for _ in sorted(packages, key=lambda _: _.size):
-        #         size_accumulator += _.size
-        #         C.print(f"    {_.name:30} {_.version:16} {human_size(_.size):>10}   [yellow]{human_size(size_accumulator):>10}")
-        # elif name.startswith('sdist'):
-        #     path = self.path / 'pypi'
-        #     with C.status(f"Computing {path} size..."):
-        #         # Fixme: bucket: editable git path
-        #         for _ in sorted(path.iterdir()):
-        #             size = disk_size(_)
-        #             size_accumulator += size
-        #             C.print(f"    {_.name:30} {human_size(size):>10}   [yellow]{human_size(size_accumulator):>10}")
-
-        # if size_accumulator:
-        #     C.print(f"  [yellow]Size accumulator: {human_size(size_accumulator)}")
 
 ####################################################################################################
 
