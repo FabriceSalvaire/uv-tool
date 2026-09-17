@@ -1,1 +1,11 @@
 *~
+
+__TRASH__/
+
+.pycache/
+.python-version
+uv.lock
+
+nogit/
+
+venv-list.json
