@@ -394,6 +394,36 @@ class SdistPackage(PackageVersion):
 
 ####################################################################################################
 
+class VenvFinder:
+
+    ##############################################
+
+    def __init__(self, path: Path) -> None:
+        with C.status(f"Searching .venv in {path}..."):
+            for root, dirnames, filenames in path.walk():
+                match root.name:
+                    case '.pycache':
+                        dirnames.clear()
+                    case '.venv':
+                        self.on_venv(root, filenames)
+                    case _:
+                        if root.name.startswith('.pycache'):
+                            dirnames.clear()
+            dirnames.sort()  # Fixme: unicode
+
+    ##############################################
+
+    def on_venv(self, path: Path, filenames: list[str]) -> None:
+        C.print(path)
+        for filename in sorted(filenames):
+            match filename:
+                case 'uv.lock':
+                    pass
+                case '.python-version':
+                    pass
+
+####################################################################################################
+
 def list_command() -> None:
     uv_cache = UvCache(CACHE_DIR)
     uv_cache.list()
@@ -412,16 +442,7 @@ def cache_size_command(prune: bool, min_size: int) -> None:
 
 def find_venv_command(path: Path | str) -> None:
     path = Path(path)
-    for root, dirnames, filenames in path.walk():
-        dirnames.sort()   # Fixme: unicode
-        if root.name == '.venv':
-            C.print(root)
-        for filename in sorted(filenames):
-            match filename:
-                case 'uv.lock':
-                    pass
-                case '.python-version':
-                    pass
+    VenvFinder(path)
 
 ####################################################################################################
 
