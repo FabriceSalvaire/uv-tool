@@ -1,5 +1,9 @@
 #! /usr/bin/env python3
 
+# uv lock --upgrade
+#  upgrade everything
+# uv sync --upgrade-package
+
 ####################################################################################################
 #
 # A uv tool to show package size on disk
@@ -398,14 +402,15 @@ class VenvFinder:
 
     ##############################################
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, max_py: int) -> None:
+        self._max_py = max_py
         with C.status(f"Searching .venv in {path}..."):
             for root, dirnames, filenames in path.walk():
                 match root.name:
                     case '.pycache':
                         dirnames.clear()
                     case '.venv':
-                        self.on_venv(root, filenames)
+                        self.on_venv(root.parent)
                     case _:
                         if root.name.startswith('.pycache'):
                             dirnames.clear()
@@ -413,14 +418,86 @@ class VenvFinder:
 
     ##############################################
 
-    def on_venv(self, path: Path, filenames: list[str]) -> None:
-        C.print(path)
-        for filename in sorted(filenames):
-            match filename:
-                case 'uv.lock':
-                    pass
-                case '.python-version':
-                    pass
+    def on_venv(self, path: Path) -> None:
+        TO_UPDATE = ['ty', 'ruff', 'rassumfrassum', 'invoke']
+        project = Project(path)
+        if project.py_version_int <= self._max_py:
+            C.rule()
+            C.print(path)
+            C.print(f"  Python version is {project.py_version}")
+            for dependency in sorted(project.dependencies, key=lambda _: _.name):
+                C.print(f"  {dependency}")
+                if dependency.name in TO_UPDATE:
+                    C.print(f"    [red]update[/] {dependency.name}")
+                    subprocess.run(
+                        # f'uv tree -P {dependency.name}',
+                        f'uv sync --upgrade-package {dependency.name}',
+                        shell=True,
+                        cwd=path,
+                        check=True,
+                        capture_output=True,
+                    )
+
+####################################################################################################
+
+class Dependency:
+
+    ##############################################
+
+    def __init__(self, name: str, version: str, tail: str) -> None:
+        self.name = name
+        self.version = version
+        self.tail = tail
+
+    ##############################################
+
+    def __repr__(self) -> str:
+        return f"{self.name} - {self.version} - {self.tail}"
+
+####################################################################################################
+
+class Project:
+
+    ##############################################
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.dependencies: list[Dependency] = []
+
+        try:
+            _ = (path / '.python-version').read_text().strip()
+            pattern = '/python'
+            i = _.find(pattern)
+            if i != -1:
+                _ = _[i + len(pattern):]
+            self.py_version = _
+        except FileNotFoundError:
+            self.py_version = None
+
+        # 'uv.lock'
+        process = subprocess.run(
+            'uv tree --outdated',
+            shell=True,
+            cwd=path,
+            check=True,
+            capture_output=True,
+        )
+        stdout = process.stdout.decode('utf8')
+        for line in stdout.splitlines():
+            if line.startswith('├'):
+                _, name, version , *tail= line.split(' ')
+                _ = Dependency(name, version, ' '.join(tail))
+                self.dependencies.append(_)
+
+    ##############################################
+
+    @property
+    def py_version_int(self) -> int:
+        _ = self.py_version
+        if _:
+            return int(_[0] + _[2:])
+        else:  # Fixme:
+            return 0
 
 ####################################################################################################
 
@@ -440,9 +517,9 @@ def cache_size_command(prune: bool, min_size: int) -> None:
 
 ####################################################################################################
 
-def find_venv_command(path: Path | str) -> None:
+def find_venv_command(path: Path | str, max_py: int) -> None:
     path = Path(path)
-    VenvFinder(path)
+    VenvFinder(path, max_py)
 
 ####################################################################################################
 
@@ -470,8 +547,11 @@ args = parser.parse_args()
 if args.list:
     list_command()
 elif args.cache_size:
-    cache_size_command(prune=False, min_size=10 * 1024**2)
+    # min_size = 10 * 1024**2
+    min_size = 0
+    cache_size_command(prune=False, min_size=min_size)
 elif args.find_venv:
-    find_venv_command(args.find_venv)
+    max_py = 315
+    find_venv_command(args.find_venv, max_py)
 else:
     parser.print_help()
