@@ -205,7 +205,7 @@ class UvCache(UvCacheMixin):
             C.print(f"[blue]{package.name:<28} {human_size(size):>10}")
             for package_version in cast(Iterator[ArchivePackage], package):
                 version = package_version.version
-                py_version = '?'  # str(package_version.py_version)
+                py_version = str(package_version.py_version)
                 size = package_version.size
                 C.print(f"  v{version:<12} @{py_version:<8} {human_size(size):>13}")
 
@@ -250,6 +250,12 @@ class PackageVersion(UvCacheMixin):
         super().__init__(path)
         self.name = name
         self.version = version
+        self.py_version: str | None = self._get_py_version()
+
+    ##############################################
+
+    def _get_py_version(self) -> str | None:
+        return None
 
 ####################################################################################################
 
@@ -334,6 +340,23 @@ class ArchivePackage(PackageVersion):
 
     ##############################################
 
+    def _get_py_version(self) -> str | None:
+        SUFFIX = '.so'
+        so_file = None
+        for root, dirnames, filenames in self.path.walk():
+            for filename in filenames:
+                if filename.endswith(SUFFIX):
+                    so_file = filename
+                    break
+        if so_file is not None:
+            match = re.match(r'^.*\.cpython-(\d\d\d)-', so_file)
+            if match:
+                _ = match.group(1)
+                return f'{_[0]}.{_[1:3]}'
+        return None
+
+    ##############################################
+
     def __repr__(self) -> str:
         return f"Archive Package {self.name} - {self.version}"
 
@@ -354,19 +377,22 @@ class SdistPackage(PackageVersion):
         version = path.name
         super().__init__(path, name, version)
 
+    ##############################################
+
+    def _get_py_version(self) -> str | None:
         SUFFIX = '.whl'
-        self.wheel = None
-        self.py_version = None
-        for root, dirnames, filenames in path.walk():
+        wheel = None
+        for root, dirnames, filenames in self.path.walk():
             for filename in filenames:
                 if filename.endswith(SUFFIX):
-                    self.wheel = filename
+                    wheel = filename
                     break
-        if self.wheel is not None:
-            match = re.match(r'^.*-cp(\d\d\d)-', self.wheel)
+        if wheel is not None:
+            match = re.match(r'^.*-cp(\d\d\d)-', wheel)
             if match:
                 _ = match.group(1)
-                self.py_version = f'{_[0]}.{_[1:3]}'
+                return f'{_[0]}.{_[1:3]}'
+        return None
 
     ##############################################
 
