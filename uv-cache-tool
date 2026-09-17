@@ -178,36 +178,31 @@ class UvCache(UvCacheMixin):
 
     ##############################################
 
-    def compute_size(self, min_size: int = 10*1024**2) -> None:
-        # C.print(f"UV Cache is: {CACHE_DIR}   {human_size(self.size)}")
-        # for _ in sorted(self.path.iterdir()):
-        #     if _.is_dir() and _.name[0] != '.':
-        #         directory = UvCacheDirectory(_)
-        #         C.print(f"  {directory.path.name:16} {human_size(directory.size):>10}")
+    def compute_size(self, min_size: int = 0) -> None:
+        C.print(f"UV Cache is: {CACHE_DIR}   {human_size(self.size)}")
+        for _ in sorted(self.path.iterdir()):
+            if _.is_dir() and _.name[0] != '.':
+                directory = UvCacheDirectory(_)
+                C.print(f"  {directory.path.name:16} {human_size(directory.size):>10}")
+
+        def print_directory(directory: dict[str, Package]) -> None:
+            for package in sorted(directory.values(), key=lambda _: _.name):
+                size = sum(_.size for _ in package)
+                if size < min_size:
+                    continue
+                C.print(f"[blue]{package.name:<28} {human_size(size):>10}")
+                for package_version in cast(Iterator[SdistPackage], package):
+                    version = package_version.version
+                    py_version = str(package_version.py_version)
+                    size = package_version.size
+                    C.print(f"  v{version:<12} @{py_version:<8} {human_size(size):>13}")
+
         C.rule()
         C.print("[red]SDist Packages")
-        for package in sorted(self.sdist_packages.values(), key=lambda _: _.name):
-            size = sum(_.size for _ in package)
-            if size < min_size:
-                continue
-            C.print(f"[blue]{package.name:<28} {human_size(size):>10}")
-            for package_version in cast(Iterator[SdistPackage], package):
-                version = package_version.version
-                py_version = str(package_version.py_version)
-                size = package_version.size
-                C.print(f"  v{version:<12} @{py_version:<8} {human_size(size):>13}")
+        print_directory(self.sdist_packages)
         C.rule()
         C.print("[red]Packages")
-        for package in sorted(self.packages.values(), key=lambda _: _.name):
-            size = sum(_.size for _ in package)
-            if size < min_size:
-                continue
-            C.print(f"[blue]{package.name:<28} {human_size(size):>10}")
-            for package_version in cast(Iterator[ArchivePackage], package):
-                version = package_version.version
-                py_version = str(package_version.py_version)
-                size = package_version.size
-                C.print(f"  v{version:<12} @{py_version:<8} {human_size(size):>13}")
+        print_directory(self.packages)
 
     ##############################################
 
@@ -408,18 +403,7 @@ def cache_size_command(prune: bool = False) -> None:
 
     uv_cache = UvCache(CACHE_DIR)
     # uv_cache.list()
-    uv_cache.compute_size()
-
-    # C.print()
-    # C.print('Packages with several versions:')
-    # C.print('  (duplicates corresponds to different cpython)')
-    # C.print()
-    # for name in sorted(Package.VERSION_MAP):
-    #     versions = simplify_versions(Package.VERSION_MAP[name])
-    #     versions.sort(key=lambda _: _[0])
-    #     if len(versions) > 1:
-    #         _  = [version + (f" #{count}" if count > 1 else '') for version, count in versions]
-    #         C.print(f"  {name:32} {_}")
+    uv_cache.compute_size(min_size = 10 * 1024**2)
 
 ####################################################################################################
 
