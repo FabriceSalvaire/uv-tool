@@ -1,9 +1,5 @@
 #! /usr/bin/env python3
 
-# uv lock --upgrade
-#  upgrade everything
-# uv sync --upgrade-package
-
 ####################################################################################################
 #
 # A uv tool to show package size on disk
@@ -22,9 +18,18 @@
 #   the directory has the same content for a pure Python package
 #   but the directory inode is different ! Thus it is duplicated ???
 
+# uv lock --upgrade
+#  upgrade everything
+# uv sync --upgrade-package
+
+# hardlink count
+#   file >= 1
+#   directory >= 2
+
 ####################################################################################################
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -37,6 +42,18 @@ from rich.console import Console
 ####################################################################################################
 
 CACHE_DIR = Path.home().joinpath('.cache', 'uv')
+
+TO_UPDATE = [
+    'invoke',
+    'ipython',
+    'pyyaml',
+    'rassumfrassum',
+    'rich',
+    'ruff',
+    'ty',
+    'uv_build',
+    'requests',
+]
 
 C = Console()
 
@@ -90,8 +107,12 @@ class PathInode:
     ##############################################
 
     @property
+    def nlink(self) -> int:
+        return self.stat.st_nlink
+
+    @property
     def is_hardlink(self) -> bool:
-        return self.stat.st_nlink > 1
+        return self.nlink > 1
 
     ##############################################
 
@@ -168,8 +189,10 @@ class UvCache(UvCacheMixin):
         def print_directory(directory: dict[str, Package]) -> None:
             for package in sorted(directory.values(), key=lambda _: _.name):
                 C.print(f"[blue]{package.name}")
-                for version in cast(Iterator[SdistPackage], package):
-                    C.print(f"  v{version.version:<24} @{version.py_version}")
+                for version in package:
+                    path = str(version.path.relative_to(CACHE_DIR))
+                    nlink = version.nlink if isinstance(version, ArchivePackage) else '---'
+                    C.print(f"  v{version.version:<24} @{version.py_version}   {path:<30}  #{nlink}")
 
         C.rule()
         C.print("[red]SDist Packages")
@@ -197,7 +220,8 @@ class UvCache(UvCacheMixin):
                     version = package_version.version
                     py_version = str(package_version.py_version)
                     size = package_version.size
-                    C.print(f"  v{version:<12} @{py_version:<8} {human_size(size):>13}")
+                    path = package_version.path.relative_to(CACHE_DIR)
+                    C.print(f"  v{version:<12} @{py_version:<8} {human_size(size):>13}   {path}")
 
         C.rule()
         C.print("[red]SDist Packages")
@@ -334,6 +358,7 @@ class ArchivePackage(PackageVersion):
         # Register to VERSION_MAP
         name, version = self._get_name_version(path)
         super().__init__(path, name, version)
+        self._nlink: int | None = None  # lazy
 
     ##############################################
 
@@ -351,6 +376,20 @@ class ArchivePackage(PackageVersion):
                 _ = match.group(1)
                 return f'{_[0]}.{_[1:3]}'
         return None
+
+    ##############################################
+
+    # hardlink_count
+    @property
+    def nlink(self) -> int:
+        if self._nlink is None:
+            path = self.path / (self.name + '.py')
+            if not path.exists():
+                path = self.path / self.name / '__init__.py'
+            if not path.exists():
+                path = self.path / f'{self.name}-{self.version}.dist-info/METADATA'
+            return PathInode(path).nlink
+        return self._nlink
 
     ##############################################
 
@@ -402,15 +441,47 @@ class VenvFinder:
 
     ##############################################
 
-    def __init__(self, path: Path, max_py: int) -> None:
+    def __init__(self, path: Path | str, max_py: int) -> None:
+        path = Path(path)
         self._max_py = max_py
+        self._paths: list[Path] = []
+        if path.is_dir():
+            self._find(path)
+        else:
+            self.load_paths(path)
+            # map(self.on_venv, self._paths)
+            for _ in self._paths:
+                self.on_venv(_)
+
+    ##############################################
+
+    def save_paths(self, path: Path | str) -> None:
+        path = Path(path)
+        data = {
+            'paths': sorted([str(_) for _ in self._paths])
+        }
+        path.write_text(json.dumps(data, indent=True))
+
+    ##############################################
+
+    def load_paths(self, path: Path | str) -> None:
+        path = Path(path)
+        C.print(f"Load {path}")
+        data = json.loads(path.read_text())
+        self._paths = [Path(_) for _ in data['paths']]
+
+    ##############################################
+
+    def _find(self, path: Path) -> None:
         with C.status(f"Searching .venv in {path}..."):
             for root, dirnames, filenames in path.walk():
                 match root.name:
                     case '.pycache':
                         dirnames.clear()
                     case '.venv':
-                        self.on_venv(root.parent)
+                        _ = root.parent
+                        self._paths.append(_)
+                        self.on_venv(_)
                     case _:
                         if root.name.startswith('.pycache'):
                             dirnames.clear()
@@ -419,7 +490,7 @@ class VenvFinder:
     ##############################################
 
     def on_venv(self, path: Path) -> None:
-        TO_UPDATE = ['ty', 'ruff', 'rassumfrassum', 'invoke']
+        # self._paths.append(path)
         project = Project(path)
         if project.py_version_int <= self._max_py:
             C.rule()
@@ -427,16 +498,8 @@ class VenvFinder:
             C.print(f"  Python version is {project.py_version}")
             for dependency in sorted(project.dependencies, key=lambda _: _.name):
                 C.print(f"  {dependency}")
-                if dependency.name in TO_UPDATE:
-                    C.print(f"    [red]update[/] {dependency.name}")
-                    subprocess.run(
-                        # f'uv tree -P {dependency.name}',
-                        f'uv sync --upgrade-package {dependency.name}',
-                        shell=True,
-                        cwd=path,
-                        check=True,
-                        capture_output=True,
-                    )
+                if dependency.latest is not None and dependency.name in TO_UPDATE:
+                    dependency.update_to_latest()
 
 ####################################################################################################
 
@@ -444,15 +507,52 @@ class Dependency:
 
     ##############################################
 
-    def __init__(self, name: str, version: str, tail: str) -> None:
+    def __init__(self, project: 'Project', name: str, version: str, tail: str) -> None:
+        self.project = project
         self.name = name
         self.version = version
         self.tail = tail
 
+        self.latest: str| None = None
+        self.group: str| None = None
+        if tail:
+            parts = [
+                _.replace('(', '').replace(')', '')
+                for _ in tail.split(') (')
+            ]
+            for part in parts:
+                if ':' in part:
+                    key, value = part.split(': ')
+                    setattr(self, key, value)
+
     ##############################################
 
     def __repr__(self) -> str:
-        return f"{self.name} - {self.version} - {self.tail}"
+        color = 'red' if self.latest is not None else 'green'
+        return f"[{color}]{self.name}[/] - {self.version} - {self.tail}"
+
+    ##############################################
+
+    def update_to_latest(self) -> None:
+        C.print(f"    [red]update[/] {self.name}")
+        # uv sync --upgrade-package
+        group = '--dev' if self.group == 'dev' else ''
+        cmd = f'uv add {group} {self.name}=={self.latest}'
+        # f'uv tree -P {self.name}',
+        # f'uv sync --upgrade-package {self.name}',
+        C.print(f"    {cmd}")
+        # try:
+        process = subprocess.run(
+            cmd,
+            shell=True,
+            cwd=self.project.path,
+            # check=True,
+            capture_output=True,
+        )
+        for _ in (process.stdout, process.stderr):
+            C.print(_.decode('utf8'))
+        # except subprocess.CalledProcessError:
+        #     pass
 
 ####################################################################################################
 
@@ -486,7 +586,7 @@ class Project:
         for line in stdout.splitlines():
             if line.startswith('├'):
                 _, name, version , *tail= line.split(' ')
-                _ = Dependency(name, version, ' '.join(tail))
+                _ = Dependency(self, name, version, ' '.join(tail))
                 self.dependencies.append(_)
 
     ##############################################
@@ -519,7 +619,8 @@ def cache_size_command(prune: bool, min_size: int) -> None:
 
 def find_venv_command(path: Path | str, max_py: int) -> None:
     path = Path(path)
-    VenvFinder(path, max_py)
+    finder = VenvFinder(path, max_py)
+    # finder.save_paths('venv-list.json')
 
 ####################################################################################################
 
@@ -539,6 +640,16 @@ parser.add_argument(
 parser.add_argument(
     '--find-venv',
 )
+parser.add_argument(
+    '--min-size',
+    default=None,
+    type=str,
+)
+parser.add_argument(
+    '--max-py',
+    default=400,
+    type=int,
+)
 args = parser.parse_args()
 
 ####################################################################################################
@@ -547,11 +658,22 @@ args = parser.parse_args()
 if args.list:
     list_command()
 elif args.cache_size:
-    # min_size = 10 * 1024**2
-    min_size = 0
+    min_size_str = args.min_size
+    if min_size_str is None:
+        min_size = 0
+    else:
+        re_match = re.match(r'(\d+)(MB|GB)', min_size_str)
+        if re_match:
+            value = int(re_match.group(1))
+            match re_match.group(2):
+                case 'MB':
+                    min_size = value * 1024**2
+                case 'GB':
+                    min_size = value * 1024**3
+        else:
+            raise ValueError(f"invalid value {min_size_str}")
     cache_size_command(prune=False, min_size=min_size)
 elif args.find_venv:
-    max_py = 315
-    find_venv_command(args.find_venv, max_py)
+    find_venv_command(args.find_venv, args.max_py)
 else:
     parser.print_help()
