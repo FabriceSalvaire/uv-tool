@@ -23,6 +23,7 @@
 import argparse
 import os
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 from rich.console import Console
@@ -152,13 +153,13 @@ class UvCache(UvCacheMixin):
 
     def __init__(self, path: Path) -> None:
         super().__init__(path)
-        self.packages: dict[str, list[Package]] = {}
-        self.sdist_packages: dict[str, list[SdistPackage]] = {}
+        self.packages: dict[str, Package] = {}
+        self.sdist_packages: dict[str, SdistPackage] = {}
         self._scan_archive()
         self._scan_sdist()
         for item in (self.packages, self.sdist_packages):
-            for _ in item.values():
-                print(_)
+            for package in item.values():
+                print(f"{package.name} {package.versions}")
 
     ##############################################
 
@@ -172,9 +173,9 @@ class UvCache(UvCacheMixin):
 
     def _scan_archive(self) -> None:
         path = self.path / 'archive-v0'
-        packages = [Package(_) for _ in path.iterdir() if _.is_dir()]
+        packages = [ArchivePackage(_) for _ in path.iterdir() if _.is_dir()]
         for package in packages:
-            self.packages.setdefault(package.name, []).append(package)
+            self.packages.setdefault(package.name, Package(package.name)).add_version(package)
 
     ##############################################
 
@@ -186,7 +187,7 @@ class UvCache(UvCacheMixin):
             for version in package.iterdir()
         ]
         for package in packages:
-            self.sdist_packages.setdefault(package.name, []).append(package)
+            self.packages.setdefault(package.name, Package(package.name)).add_version(package)
 
 ####################################################################################################
 
@@ -228,57 +229,104 @@ class UvCacheDirectory(UvCacheMixin):
 
 ####################################################################################################
 
-class Package(UvCacheMixin):
+class PackageVersion(UvCacheMixin):
+
+    ##############################################
+
+    def __init__(self, path: Path, name: str, version: str) -> None:
+        super().__init__(path)
+        self.name = name
+        self.version = version
+
+####################################################################################################
+
+class Package:
+
+    ##############################################
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self._versions: list[PackageVersion] = []
+
+    ##############################################
+
+    def __len_(self) -> int:
+        return len(self._versions)
+
+    def __iter__(self) -> Iterator[PackageVersion]:
+        return iter(self._versions)
+
+    ##############################################
+
+    def add_version(self, version: PackageVersion) -> None:
+        self._versions.append(version)
+
+    ##############################################
+
+    @property
+    def versions(self) -> list[str]:
+        return [_.version for _ in self]
+
+####################################################################################################
+
+class ArchivePackage(PackageVersion):
     """Implements a Python Package"""
 
     VERSION_MAP: dict[str, list[str]] = {}
 
     ##############################################
 
-    def __init__(self, path: Path) -> None:
-        super().__init__(path)
-        # get version and name
+    @classmethod
+    def _get_name_version(cls, path: Path) -> tuple[str, str]:
         # Get package name and version from name-version.dist-info filename
-        # Register to VERSION_MAP
         # Fixme:
-        self.name = '???'
-        self.version = '???'
+        name = '???'
+        version = '???'
         name_version = None
         SUFFIX = '.dist-info'
-        for _ in self.path.iterdir():
+        for _ in path.iterdir():
             name = _.name
             if name.endswith(SUFFIX):
                 name_version = name[:-len(SUFFIX)]
         if name_version is not None:
             i = name_version.rfind('-')
             if i != -1:
-                self.name = name_version[:i]
-                self.version = name_version[i+1:]
-                self.VERSION_MAP.setdefault(self.name, [])
-                self.VERSION_MAP[self.name].append(self.version)
+                name = name_version[:i]
+                version = name_version[i+1:]
+                # self.VERSION_MAP.setdefault(name, [])
+                # self.VERSION_MAP[name].append(version)
             else:
-                C.print(f"[red]WARNING: unsupported version for {self.path}")
+                C.print(f"[red]WARNING: unsupported version for {path}")
         else:
             # Fixme:
             #   /home/fabrice/.cache/uv/archive-v0/jnmE0T_XlOGz8rOhVrFja/bin/python3.13
-            C.print(f"[red]WARNING: dist-info not found for {self.path}")
+            C.print(f"[red]WARNING: dist-info not found for {path}")
+        return name, version
+
+    ##############################################
+
+    def __init__(self, path: Path) -> None:
+        # get version and name
+        # Register to VERSION_MAP
+        name, version = self._get_name_version(path)
+        super().__init__(path, name, version)
 
     ##############################################
 
     def __repr__(self) -> str:
-        return f"Package {self.name} - {self.version}"
+        return f"Archive Package {self.name} - {self.version}"
 
 ####################################################################################################
 
-class SdistPackage(UvCacheMixin):
+class SdistPackage(PackageVersion):
     """Implements a Python Package"""
 
     ##############################################
 
     def __init__(self, path: Path) -> None:
-        super().__init__(path)
-        self.name = path.parent.name
-        self.version = path.name
+        name = path.parent.name
+        version = path.name
+        super().__init__(path, name, version)
 
     ##############################################
 
