@@ -178,16 +178,50 @@ class UvCache(UvCacheMixin):
 
     def __init__(self, path: Path) -> None:
         super().__init__(path)
-        self.packages: dict[str, Package] = {}
-        self._scan_archive()
-        self.sdist_packages: dict[str, Package] = {}
-        self._scan_sdist()
+        self.directories: dict[str, UvCacheDirectory] = {}
+        for subdir_path in self.yield_subirectories():
+            name, version = self.get_directory_version(subdir_path)
+            match name:
+                case '.' | '..':
+                    pass
+                case 'sdists':
+                    directory = SDistDirectory(self, subdir_path)
+                case 'archive':
+                    directory = ArchiveDirectory(self, subdir_path)
+                case _:
+                    directory = UvCacheDirectory(self, subdir_path)
+            self.directories[name] = directory
+
+    ##############################################
+
+    def yield_subirectories(self) -> Iterator[Path]:
+        for _ in self.path.iterdir():
+            if _.is_dir():
+                yield _.relative_to(self.path)
+
+    def get_directory_version(self, path: Path) -> tuple[str, int]:
+        name = path.name
+        re_match = re.match(r'^([a-z]+)-v(\d+)$', name)
+        if re_match is not None:
+            name, _ = re_match.groups()
+            return name, int(_)
+        raise ValueError(f"Invalid directory name {name}")
+
+    ##############################################
+
+    @property
+    def sdists_directory(self) -> SDistDirectory:
+        return cast(SDistDirectory, self.directories['sdists'])
+
+    @property
+    def archive_directory(self) -> ArchiveDirectory:
+        return cast(ArchiveDirectory, self.directories['archive'])
 
     ##############################################
 
     def list(self) -> None:
-        def print_directory(directory: dict[str, Package]) -> None:
-            for package in sorted(directory.values(), key=lambda _: _.name):
+        def print_directory(directory: PackageDirectory) -> None:
+            for package in directory:
                 C.print(f"[blue]{package.name}")
                 for version in package:
                     path = str(version.path.relative_to(CACHE_DIR))
@@ -196,21 +230,17 @@ class UvCache(UvCacheMixin):
 
         C.rule()
         C.print("[red]SDist Packages")
-        print_directory(self.sdist_packages)
+        print_directory(self.sdists_directory)
         C.rule()
         C.print("[red]Packages")
-        print_directory(self.packages)
+        print_directory(self.archive_directory)
 
     ##############################################
 
     def compute_size(self, min_size: int = 0) -> None:
         C.print(f"UV Cache is: {CACHE_DIR}   {human_size(self.size)}")
-        self.directories: dict[str, UvCacheDirectory] = {}
-        for subdir_path in sorted(self.path.iterdir()):
-            if subdir_path.is_dir() and subdir_path.name[0] != '.':
-                directory = UvCacheDirectory(subdir_path)
-                self.directories[directory.name] = directory
-                C.print(f"  {directory.path.name:16} {human_size(directory.size):>10}")
+        for _ in self.directories.values():
+            C.print(f"  {_.path.name:16} {human_size(_.size):>10}")
 
         def sort_key_by_name(_: Package) -> str:
             return _.name
@@ -218,9 +248,9 @@ class UvCache(UvCacheMixin):
         def sort_key_by_size(_: Package) -> int:
             return _.size
 
-        def print_directory(directory: dict[str, Package]) -> None:
+        def print_directory(directory: PackageDirectory) -> None:
             sort_key = sort_key_by_size
-            packages = sorted(directory.values(), key=sort_key)
+            packages = sorted(directory, key=sort_key)
             for package in packages:
                 size = package.size
                 if size < min_size:
@@ -235,32 +265,10 @@ class UvCache(UvCacheMixin):
 
         C.rule()
         C.print("[red]SDist Packages")
-        print_directory('sdist-v9', self.sdist_packages)
+        print_directory(self.sdists_directory)
         C.rule()
         C.print("[red]Packages")
-        print_directory(self.packages)
-
-    ##############################################
-
-    def _scan_archive(self) -> None:
-        path = self.path / 'archive-v0'
-        packages = [ArchivePackage(_) for _ in path.iterdir() if _.is_dir()]
-        for package in packages:
-            self.packages.setdefault(package.name, Package(package.name)).add_version(package)
-
-    ##############################################
-
-    def _scan_sdist(self) -> None:
-        path = self.path / 'sdists-v9'
-        # Fixme: bucket: editable git path
-        packages = [
-            SdistPackage(version)
-            for package in (path / 'pypi').iterdir()
-            for version in package.iterdir()
-        ]
-        # Fixme: duplicated code
-        for package in packages:
-            self.sdist_packages.setdefault(package.name, Package(package.name)).add_version(package)
+        print_directory(self.archive_directory)
 
 ####################################################################################################
 
@@ -268,14 +276,66 @@ class UvCacheDirectory(UvCacheMixin):
 
     ##############################################
 
-    def __init__(self, path: Path) -> None:
-        super().__init__(path)
+    def __init__(self, uv_cache: UvCache, path: Path | str) -> None:
+        self.uv_cache = uv_cache
+        super().__init__(self.uv_cache.path / path)
 
     ##############################################
 
     @property
     def name(self) -> str:
         return self.path.name
+
+####################################################################################################
+
+class PackageDirectory(UvCacheDirectory):
+
+    ##############################################
+
+    def __init__(self, uv_cache: UvCache, path: Path | str) -> None:
+        super().__init__(uv_cache, path)
+        self.packages: dict[str, Package] = {}
+        self._scan()
+
+    ##############################################
+
+    def _scan(self) -> None:
+        with C.status(f"Scanning {self.path}..."):
+            for package in self._get_packages():
+                self.packages.setdefault(package.name, Package(package.name)).add_version(package)
+
+    ##############################################
+
+    def _get_packages(self) -> list[PackageVersion]:
+        raise NotImplementedError
+
+    ##############################################
+
+    def __iter__(self) -> Iterator[Package]:
+        return iter(sorted(self.packages.values(), key=lambda _: _.name))
+
+####################################################################################################
+
+class ArchiveDirectory(PackageDirectory):
+
+    ##############################################
+
+    def _get_packages(self) -> list[PackageVersion]:
+        return [ArchivePackage(_) for _ in self.path.iterdir() if _.is_dir()]
+
+####################################################################################################
+
+class SDistDirectory(PackageDirectory):
+
+    ##############################################
+
+    def _get_packages(self) -> list[PackageVersion]:
+        # Fixme: bucket: editable git path
+        return [
+            SdistPackage(version)
+            for package in (self.path / 'pypi').iterdir()
+            for version in package.iterdir()
+        ]
 
 ####################################################################################################
 
@@ -360,7 +420,7 @@ class ArchivePackage(PackageVersion):
             i = name_version.rfind('-')
             if i != -1:
                 name = name_version[:i]
-                version = name_version[i+1:]
+                version = name_version[i + 1:]
             else:
                 C.print(f"[red]WARNING: unsupported version for {path}")
         else:
@@ -385,7 +445,7 @@ class ArchivePackage(PackageVersion):
     def _get_py_version(self) -> str | None:
         SUFFIX = '.so'
         so_file = None
-        for root, dirnames, filenames in self.path.walk():
+        for _root, _dirnames, filenames in self.path.walk():
             for filename in filenames:
                 if filename.endswith(SUFFIX):
                     so_file = filename
@@ -438,7 +498,7 @@ class SdistPackage(PackageVersion):
     def _get_py_version(self) -> str | None:
         SUFFIX = '.whl'
         wheel = None
-        for root, dirnames, filenames in self.path.walk():
+        for _root, _dirnames, filenames in self.path.walk():
             for filename in filenames:
                 if filename.endswith(SUFFIX):
                     wheel = filename
@@ -493,7 +553,7 @@ class VenvFinder:
 
     def _find(self, path: Path) -> None:
         with C.status(f"Searching .venv in {path}..."):
-            for root, dirnames, filenames in path.walk():
+            for root, dirnames, _filenames in path.walk():
                 match root.name:
                     case '.pycache':
                         dirnames.clear()
@@ -526,14 +586,14 @@ class Dependency:
 
     ##############################################
 
-    def __init__(self, project: 'Project', name: str, version: str, tail: str) -> None:
+    def __init__(self, project: Project, name: str, version: str, tail: str) -> None:
         self.project = project
         self.name = name
         self.version = version
         self.tail = tail
 
-        self.latest: str| None = None
-        self.group: str| None = None
+        self.latest: str | None = None
+        self.group: str | None = None
         if tail:
             parts = [
                 _.replace('(', '').replace(')', '')
@@ -604,7 +664,7 @@ class Project:
         stdout = process.stdout.decode('utf8')
         for line in stdout.splitlines():
             if line[0] in '├└─':
-                _, name, version , *tail= line.split(' ')
+                _, name, version, *tail = line.split(' ')
                 _ = Dependency(self, name, version, ' '.join(tail))
                 self.dependencies.append(_)
 
