@@ -179,8 +179,8 @@ class UvCache(UvCacheMixin):
     def __init__(self, path: Path) -> None:
         super().__init__(path)
         self.packages: dict[str, Package] = {}
-        self.sdist_packages: dict[str, Package] = {}
         self._scan_archive()
+        self.sdist_packages: dict[str, Package] = {}
         self._scan_sdist()
 
     ##############################################
@@ -205,14 +205,24 @@ class UvCache(UvCacheMixin):
 
     def compute_size(self, min_size: int = 0) -> None:
         C.print(f"UV Cache is: {CACHE_DIR}   {human_size(self.size)}")
-        for _ in sorted(self.path.iterdir()):
-            if _.is_dir() and _.name[0] != '.':
-                directory = UvCacheDirectory(_)
+        self.directories: dict[str, UvCacheDirectory] = {}
+        for subdir_path in sorted(self.path.iterdir()):
+            if subdir_path.is_dir() and subdir_path.name[0] != '.':
+                directory = UvCacheDirectory(subdir_path)
+                self.directories[directory.name] = directory
                 C.print(f"  {directory.path.name:16} {human_size(directory.size):>10}")
 
+        def sort_key_by_name(_: Package) -> str:
+            return _.name
+
+        def sort_key_by_size(_: Package) -> int:
+            return _.size
+
         def print_directory(directory: dict[str, Package]) -> None:
-            for package in sorted(directory.values(), key=lambda _: _.name):
-                size = sum(_.size for _ in package)
+            sort_key = sort_key_by_size
+            packages = sorted(directory.values(), key=sort_key)
+            for package in packages:
+                size = package.size
                 if size < min_size:
                     continue
                 C.print(f"[blue]{package.name:<28} {human_size(size):>10}")
@@ -225,7 +235,7 @@ class UvCache(UvCacheMixin):
 
         C.rule()
         C.print("[red]SDist Packages")
-        print_directory(self.sdist_packages)
+        print_directory('sdist-v9', self.sdist_packages)
         C.rule()
         C.print("[red]Packages")
         print_directory(self.packages)
@@ -260,6 +270,12 @@ class UvCacheDirectory(UvCacheMixin):
 
     def __init__(self, path: Path) -> None:
         super().__init__(path)
+
+    ##############################################
+
+    @property
+    def name(self) -> str:
+        return self.path.name
 
 ####################################################################################################
 
@@ -311,6 +327,10 @@ class Package:
     def versions_count(self) -> list[tuple[str, int]]:
         versions = self.versions
         return [(_, versions.count(_)) for _ in set(versions)]
+
+    @property
+    def size(self) -> int:
+        return sum(_.size for _ in self._versions)
 
 ####################################################################################################
 
@@ -449,7 +469,6 @@ class VenvFinder:
             self._find(path)
         else:
             self.load_paths(path)
-            # map(self.on_venv, self._paths)
             for _ in self._paths:
                 self.on_venv(_)
 
