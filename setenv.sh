@@ -5,3 +5,5 @@
 export PYTHONPYCACHEPREFIX=$PWD/.pycache
 
 source .venv/bin/activate
+
+append_to_python_path_if_not $PWD/src
