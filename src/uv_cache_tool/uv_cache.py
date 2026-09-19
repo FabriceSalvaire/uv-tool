@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
-from .path import PathInode
+from .path import PathInode, disk_size
 from .print_tool import console as C
 from .print_tool import human_size
 
@@ -27,35 +27,7 @@ CACHE_DIR = Path.home().joinpath('.cache', 'uv')
 
 ####################################################################################################
 
-def disk_size(path: Path) -> int:
-    """Return the disk size of path in bytes.
-
-    Hardlinked inodes are counted once.
-
-   """
-    size = 0
-    inodes: set[int] = set()
-
-    def accumulate(path: Path) -> None:
-        file = PathInode(path)
-        inode = file.inode
-        if inode not in inodes:
-            nonlocal size
-            size += file.disk_size
-        # else:
-        #     C.print(f"hardlink duplicate {file}")
-        inodes.add(inode)
-
-    accumulate(path)
-    for root, dirnames, filenames in path.walk():
-        for item in (dirnames, filenames):
-            for _ in item:
-                accumulate(root / _)
-    return size
-
-####################################################################################################
-
-class UvCacheMixin:
+class DirectorySizeMixin:
 
     ##############################################
 
@@ -75,7 +47,7 @@ class UvCacheMixin:
 
 ####################################################################################################
 
-class UvCache(UvCacheMixin):
+class UvCache(DirectorySizeMixin):
 
     ##############################################
 
@@ -123,7 +95,7 @@ class UvCache(UvCacheMixin):
     ##############################################
 
     def list(self) -> None:
-        def print_directory(directory: PackageDirectory) -> None:
+        def print_directory(directory: Bucket) -> None:
             for package in directory:
                 C.print(f"[blue]{package.name}")
                 for version in package:
@@ -151,7 +123,7 @@ class UvCache(UvCacheMixin):
         def sort_key_by_size(_: Package) -> int:
             return _.size
 
-        def print_directory(directory: PackageDirectory) -> None:
+        def print_directory(directory: Bucket) -> None:
             sort_key = sort_key_by_size
             packages = sorted(directory, key=sort_key)
             for package in packages:
@@ -175,7 +147,7 @@ class UvCache(UvCacheMixin):
 
 ####################################################################################################
 
-class UvCacheDirectory(UvCacheMixin):
+class UvCacheDirectory(DirectorySizeMixin):
 
     ##############################################
 
@@ -191,7 +163,7 @@ class UvCacheDirectory(UvCacheMixin):
 
 ####################################################################################################
 
-class PackageDirectory(UvCacheDirectory):
+class Bucket(UvCacheDirectory):
 
     ##############################################
 
@@ -219,7 +191,7 @@ class PackageDirectory(UvCacheDirectory):
 
 ####################################################################################################
 
-class ArchiveDirectory(PackageDirectory):
+class ArchiveDirectory(Bucket):
 
     ##############################################
 
@@ -228,7 +200,7 @@ class ArchiveDirectory(PackageDirectory):
 
 ####################################################################################################
 
-class SDistDirectory(PackageDirectory):
+class SDistDirectory(Bucket):
 
     ##############################################
 
@@ -242,7 +214,7 @@ class SDistDirectory(PackageDirectory):
 
 ####################################################################################################
 
-class PackageVersion(UvCacheMixin):
+class PackageVersion(DirectorySizeMixin):
 
     ##############################################
 
@@ -417,4 +389,3 @@ class SdistPackage(PackageVersion):
 
     def __repr__(self) -> str:
         return f"Sdist Package {self.name} - {self.version} - {self.py_version}"
-

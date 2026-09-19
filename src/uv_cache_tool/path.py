@@ -8,7 +8,7 @@
 #
 ####################################################################################################
 
-__all__ = ['PathInode']
+__all__ = ['PathInode', 'disk_size']
 
 ####################################################################################################
 
@@ -63,3 +63,31 @@ class PathInode:
         # size += _.stat().st_size
         # allocated
         return self.stat.st_blocks * 512
+
+####################################################################################################
+
+def disk_size(path: Path) -> int:
+    """Return the disk size of path in bytes.
+
+    Hardlinked inodes are counted once.
+
+   """
+    size = 0
+    inodes: set[int] = set()
+
+    def accumulate(path: Path) -> None:
+        file = PathInode(path)
+        inode = file.inode
+        if inode not in inodes:
+            nonlocal size
+            size += file.disk_size
+        # else:
+        #     C.print(f"hardlink duplicate {file}")
+        inodes.add(inode)
+
+    accumulate(path)
+    for root, dirnames, filenames in path.walk():
+        for item in (dirnames, filenames):
+            for _ in item:
+                accumulate(root / _)
+    return size
